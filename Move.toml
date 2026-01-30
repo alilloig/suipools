@@ -1,0 +1,6 @@
+[package]
+name = "world_cup_pool"
+edition = "2024"
+
+[addresses]
+world_cup_pool = "0x0"
