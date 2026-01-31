@@ -1,22 +1,23 @@
 /// Module: pool
-/// Core module for the World Cup office pool.
-/// Manages pool creation, joining, betting, result entry, scoring, and prize distribution.
+/// Core module for the World Cup SuiPoolool.
+/// Manages pool creation, joining, betting, scoring, and prize distribution.
+/// Results are stored globally in the Tournament object (tournament.move).
 module world_cup_pool::pool;
 
-// === Imports ===
 use sui::balance::{Self, Balance};
-use sui::coin::Coin;
 use sui::clock::Clock;
+use sui::coin::Coin;
 use sui::event;
 use sui::sui::SUI;
 use sui::table::{Self, Table};
 use world_cup_pool::scoring;
+use world_cup_pool::tournament::Tournament;
 
 // === Errors ===
 const ENotParticipant: u64 = 0;
 const EAlreadyJoined: u64 = 1;
 const EIncorrectFee: u64 = 2;
-const EInvalidDeadlines: u64 = 3;
+const EInvalidPrizeBps: u64 = 3;
 const EBettingClosed: u64 = 4;
 const EBetAlreadyPlaced: u64 = 5;
 const EInvalidOutcome: u64 = 6;
@@ -27,20 +28,31 @@ const ENotFinalized: u64 = 10;
 const EAlreadyClaimed: u64 = 11;
 const ENoPrize: u64 = 12;
 const EPoolNotEmpty: u64 = 13;
-const EResultAlreadyEntered: u64 = 14;
+const EPhaseNotOpen: u64 = 14;
 const EInvalidMatchIndex: u64 = 15;
+const ENoDrawInKnockout: u64 = 16;
 
 // === Constants ===
-
-/// Number of deadline slots (one per phase)
-const NUM_DEADLINES: u64 = 7;
 
 /// Total matches
 const TOTAL_MATCHES: u64 = 104;
 
-/// Prize distribution in basis points (out of 10000)
-/// 1st: 4000, 2nd: 2000, 3rd: 1000, 4th: 800, 5th-8th: 550 each
-const PRIZE_BPS: vector<u64> = vector[4000, 2000, 1000, 800, 550, 550, 550, 550];
+/// Hardcoded deadlines (ms) - 1 minute before first match of each phase.
+/// 2026 FIFA World Cup schedule (UTC):
+///   Group stage:    Jun 11, 2026 15:00 UTC -> deadline 14:59
+///   R32:            Jul 1, 2026 15:00 UTC  -> deadline 14:59
+///   R16:            Jul 5, 2026 15:00 UTC  -> deadline 14:59
+///   QF:             Jul 9, 2026 15:00 UTC  -> deadline 14:59
+///   SF:             Jul 13, 2026 19:00 UTC -> deadline 18:59
+///   3rd place:      Jul 18, 2026 19:00 UTC -> deadline 18:59
+///   Final:          Jul 19, 2026 19:00 UTC -> deadline 18:59
+const DEADLINE_GROUP: u64 = 1_781_362_740_000; // Jun 11, 2026 14:59 UTC
+const DEADLINE_R32: u64 = 1_783_090_740_000; // Jul 1, 2026 14:59 UTC
+const DEADLINE_R16: u64 = 1_783_436_340_000; // Jul 5, 2026 14:59 UTC
+const DEADLINE_QF: u64 = 1_783_781_940_000; // Jul 9, 2026 14:59 UTC
+const DEADLINE_SF: u64 = 1_784_142_000_000; // Jul 13, 2026 18:59 UTC  (adjusted, these are 19:00 starts)
+const DEADLINE_3RD: u64 = 1_784_574_000_000; // Jul 18, 2026 18:59 UTC
+const DEADLINE_FINAL: u64 = 1_784_660_400_000; // Jul 19, 2026 18:59 UTC
 
 // === Structs ===
 
@@ -49,18 +61,14 @@ public struct Pool has key {
     id: UID,
     /// Entry fee in MIST (0 = free pool)
     entry_fee: u64,
-    /// 7 deadlines (ms timestamps), one per phase
-    deadlines: vector<u64>,
+    /// Prize distribution in basis points (out of 10000), non-increasing
+    prize_bps: vector<u64>,
     /// Accumulated prize pool
     prize_pool: Balance<SUI>,
     /// List of participant addresses (for iteration)
     participants: vector<address>,
     /// Participant data keyed by address
     participant_data: Table<address, ParticipantData>,
-    /// 104-element results vector (0=not entered, 1=Home, 2=Draw, 3=Away)
-    results: vector<u8>,
-    /// Number of results entered so far
-    results_entered: u64,
     /// Whether the pool has been finalized
     finalized: bool,
     /// Number of prizes claimed
@@ -79,10 +87,8 @@ public struct PoolCreatorCap has key, store {
 public struct ParticipantData has store {
     /// 104-element bets vector
     bets: vector<u8>,
-    /// Accumulated points
+    /// Points (computed at finalize)
     points: u64,
-    /// Whether group bonus has been checked for each of 12 groups
-    group_bonus_checked: vector<bool>,
     /// Prize amount (set on finalize)
     prize_amount: u64,
     /// Whether prize has been claimed
@@ -90,7 +96,7 @@ public struct ParticipantData has store {
 }
 
 /// Leaderboard entry for sorting
-public struct LeaderboardEntry has store, copy, drop {
+public struct LeaderboardEntry has copy, drop, store {
     participant: address,
     points: u64,
 }
@@ -114,12 +120,6 @@ public struct BetsPlaced has copy, drop {
     match_count: u64,
 }
 
-public struct ResultsEntered has copy, drop {
-    pool_id: ID,
-    match_count: u64,
-    total_entered: u64,
-}
-
 public struct PoolFinalized has copy, drop {
     pool_id: ID,
     participant_count: u64,
@@ -134,28 +134,28 @@ public struct PrizeClaimed has copy, drop {
 // === Public Functions ===
 
 /// Create a new pool. The creator is automatically joined.
-/// `deadlines` must have exactly 7 elements, each > 0, in non-decreasing order.
-/// `entry_fee` is in MIST (can be 0 for a free pool).
+/// `prize_bps` must sum to 10000, be non-increasing, and have length >= 1.
 /// If entry_fee > 0, `fee_coin` must contain exactly that amount.
 public fun create(
     entry_fee: u64,
-    deadlines: vector<u64>,
+    prize_bps: vector<u64>,
     mut fee_coin: Option<Coin<SUI>>,
     ctx: &mut TxContext,
 ): PoolCreatorCap {
-    // Validate deadlines
-    assert!(deadlines.length() == NUM_DEADLINES, EInvalidDeadlines);
+    // Validate prize_bps
+    assert!(prize_bps.length() >= 1, EInvalidPrizeBps);
+    let mut sum: u64 = 0;
     let mut i = 0;
-    while (i < NUM_DEADLINES) {
-        assert!(*deadlines.borrow(i) > 0, EInvalidDeadlines);
+    while (i < prize_bps.length()) {
+        let bp = *prize_bps.borrow(i);
+        assert!(bp > 0, EInvalidPrizeBps);
+        sum = sum + bp;
         if (i > 0) {
-            assert!(*deadlines.borrow(i) >= *deadlines.borrow(i - 1), EInvalidDeadlines);
+            assert!(bp <= *prize_bps.borrow(i - 1), EInvalidPrizeBps);
         };
         i = i + 1;
     };
-
-    // Initialize results vector (104 zeros)
-    let results = new_zero_vector_u8(TOTAL_MATCHES);
+    assert!(sum == 10000, EInvalidPrizeBps);
 
     let creator = ctx.sender();
 
@@ -182,12 +182,10 @@ public fun create(
     let pool = Pool {
         id: object::new(ctx),
         entry_fee,
-        deadlines,
+        prize_bps,
         prize_pool,
         participants: vector[creator],
         participant_data,
-        results,
-        results_entered: 0,
         finalized: false,
         claims_made: 0,
         leaderboard: vector[],
@@ -209,11 +207,7 @@ public fun create(
 }
 
 /// Join an existing pool. Pays the entry fee.
-public fun join(
-    pool: &mut Pool,
-    mut fee_coin: Option<Coin<SUI>>,
-    ctx: &mut TxContext,
-) {
+public fun join(pool: &mut Pool, mut fee_coin: Option<Coin<SUI>>, ctx: &mut TxContext) {
     let participant = ctx.sender();
     assert!(!pool.participant_data.contains(participant), EAlreadyJoined);
 
@@ -241,12 +235,12 @@ public fun join(
 }
 
 /// Place bets for specific matches.
-/// `match_indices` and `outcomes` must be the same length.
-/// Each outcome must be 1 (Home), 2 (Draw), or 3 (Away).
-/// Cannot overwrite a previously placed bet (non-zero value).
-/// Each match must be before its phase deadline.
+/// Phase gating: match's phase must be <= tournament.current_phase.
+/// Deadline gating: clock must be before the hardcoded deadline for the match's phase.
+/// No draws allowed for knockout matches (index >= 72).
 public fun place_bets(
     pool: &mut Pool,
+    tournament: &Tournament,
     match_indices: vector<u64>,
     outcomes: vector<u8>,
     clock: &Clock,
@@ -257,6 +251,7 @@ public fun place_bets(
     assert!(match_indices.length() == outcomes.length(), EVectorLengthMismatch);
 
     let now = clock.timestamp_ms();
+    let current_phase = tournament.current_phase();
     let data = pool.participant_data.borrow_mut(sender);
     let len = match_indices.length();
 
@@ -268,9 +263,18 @@ public fun place_bets(
         assert!(match_idx < TOTAL_MATCHES, EInvalidMatchIndex);
         assert!(outcome >= 1 && outcome <= 3, EInvalidOutcome);
 
-        // Check deadline
-        let deadline_idx = scoring::deadline_index_for_match(match_idx);
-        assert!(now < *pool.deadlines.borrow(deadline_idx), EBettingClosed);
+        // Phase gating
+        let match_phase = scoring::phase_for_match(match_idx);
+        assert!((match_phase as u8) <= current_phase, EPhaseNotOpen);
+
+        // Deadline gating
+        let deadline = deadline_for_phase(match_phase);
+        assert!(now < deadline, EBettingClosed);
+
+        // No draws in knockout
+        if (match_idx >= 72) {
+            assert!(outcome != 2, ENoDrawInKnockout);
+        };
 
         // Cannot overwrite existing bet
         assert!(*data.bets.borrow(match_idx) == 0, EBetAlreadyPlaced);
@@ -287,117 +291,45 @@ public fun place_bets(
     });
 }
 
-/// Enter results for specific matches. Only the pool creator (cap holder) can do this.
-/// Scores all participants for each match entered.
-/// When a group becomes complete, checks group bonus for all participants.
-public fun enter_results(
-    pool: &mut Pool,
-    cap: &PoolCreatorCap,
-    match_indices: vector<u64>,
-    outcomes: vector<u8>,
-) {
+/// Finalize the pool using tournament results.
+/// Requires all 104 tournament results to be entered.
+/// Computes scores via compute_total_score and distributes prizes per pool's prize_bps.
+public fun finalize(pool: &mut Pool, cap: &PoolCreatorCap, tournament: &Tournament) {
     assert!(cap.pool_id == object::id(pool));
     assert!(!pool.finalized, EAlreadyFinalized);
-    assert!(match_indices.length() == outcomes.length(), EVectorLengthMismatch);
+    assert!(tournament.results_entered() == TOTAL_MATCHES, ENotAllResultsEntered);
 
-    let len = match_indices.length();
-    let mut i = 0;
-
-    while (i < len) {
-        let match_idx = *match_indices.borrow(i);
-        let outcome = *outcomes.borrow(i);
-
-        assert!(match_idx < TOTAL_MATCHES, EInvalidMatchIndex);
-        assert!(outcome >= 1 && outcome <= 3, EInvalidOutcome);
-        assert!(*pool.results.borrow(match_idx) == 0, EResultAlreadyEntered);
-
-        *pool.results.borrow_mut(match_idx) = outcome;
-        pool.results_entered = pool.results_entered + 1;
-
-        // Score all participants for this match
-        let points = scoring::points_for_match(match_idx);
-        let num_participants = pool.participants.length();
-        let mut p = 0;
-        while (p < num_participants) {
-            let addr = *pool.participants.borrow(p);
-            let data = pool.participant_data.borrow_mut(addr);
-            if (*data.bets.borrow(match_idx) == outcome) {
-                data.points = data.points + points;
-            };
-            p = p + 1;
-        };
-
-        // Check group bonus if this is a group-stage match and group is now complete
-        if (match_idx < 72) {
-            let group_idx = scoring::group_index_for_match(match_idx);
-            if (scoring::is_group_complete(&pool.results, group_idx)) {
-                let num_participants = pool.participants.length();
-                let mut p = 0;
-                while (p < num_participants) {
-                    let addr = *pool.participants.borrow(p);
-                    let data = pool.participant_data.borrow_mut(addr);
-                    if (!*data.group_bonus_checked.borrow(group_idx)) {
-                        *data.group_bonus_checked.borrow_mut(group_idx) = true;
-                        let bonus = scoring::check_group_bonus(
-                            &data.bets,
-                            &pool.results,
-                            group_idx,
-                        );
-                        data.points = data.points + bonus;
-                    };
-                    p = p + 1;
-                };
-            };
-        };
-
-        i = i + 1;
-    };
-
-    event::emit(ResultsEntered {
-        pool_id: object::id(pool),
-        match_count: len,
-        total_entered: pool.results_entered,
-    });
-}
-
-/// Finalize the pool after all results are entered.
-/// Builds leaderboard, handles ties, and computes prize amounts.
-public fun finalize(
-    pool: &mut Pool,
-    cap: &PoolCreatorCap,
-) {
-    assert!(cap.pool_id == object::id(pool));
-    assert!(!pool.finalized, EAlreadyFinalized);
-    assert!(pool.results_entered == TOTAL_MATCHES, ENotAllResultsEntered);
-
+    let results = tournament.results();
     let num_participants = pool.participants.length();
 
-    // Build leaderboard entries
+    // Compute scores for all participants
     let mut entries = vector[];
     let mut i = 0;
     while (i < num_participants) {
         let addr = *pool.participants.borrow(i);
-        let data = pool.participant_data.borrow(addr);
+        let data = pool.participant_data.borrow_mut(addr);
+        let score = scoring::compute_total_score(&data.bets, results);
+        data.points = score;
         entries.push_back(LeaderboardEntry {
             participant: addr,
-            points: data.points,
+            points: score,
         });
         i = i + 1;
     };
 
-    // Sort by points descending (insertion sort — N is small)
+    // Sort by points descending
     sort_leaderboard_desc(&mut entries);
 
     // Compute prizes
     let pool_value = pool.prize_pool.value();
-    let prize_bps = PRIZE_BPS;
+    let prize_bps = &pool.prize_bps;
     let num_prize_slots = if (num_participants < prize_bps.length()) {
         num_participants
     } else {
         prize_bps.length()
     };
 
-    // Calculate total BPs used (for <8 participants, sum only first N)
+    // Calculate total BPs used
     let mut total_bp_used: u64 = 0;
     let mut j = 0;
     while (j < num_prize_slots) {
@@ -408,7 +340,6 @@ public fun finalize(
     // Assign prizes handling ties
     let mut pos = 0;
     while (pos < num_prize_slots) {
-        // Find extent of tie at this position
         let current_points = entries.borrow(pos).points;
         let mut tie_end = pos + 1;
         while (tie_end < num_participants && entries.borrow(tie_end).points == current_points) {
@@ -457,10 +388,7 @@ public fun finalize(
 
 /// Claim your prize. Transfers the computed amount to the caller.
 #[allow(lint(self_transfer))]
-public fun claim_prize(
-    pool: &mut Pool,
-    ctx: &mut TxContext,
-) {
+public fun claim_prize(pool: &mut Pool, ctx: &mut TxContext) {
     assert!(pool.finalized, ENotFinalized);
     let sender = ctx.sender();
     assert!(pool.participant_data.contains(sender), ENotParticipant);
@@ -485,13 +413,8 @@ public fun claim_prize(
 }
 
 /// Withdraw any remaining dust from the pool after all prizes are claimed.
-/// Only the creator can call this.
 #[allow(lint(self_transfer))]
-public fun withdraw_remainder(
-    pool: &mut Pool,
-    cap: &PoolCreatorCap,
-    ctx: &mut TxContext,
-) {
+public fun withdraw_remainder(pool: &mut Pool, cap: &PoolCreatorCap, ctx: &mut TxContext) {
     assert!(cap.pool_id == object::id(pool));
     assert!(pool.finalized, ENotFinalized);
 
@@ -517,6 +440,11 @@ public fun entry_fee(pool: &Pool): u64 {
     pool.entry_fee
 }
 
+/// Returns the prize distribution basis points.
+public fun prize_bps(pool: &Pool): &vector<u64> {
+    &pool.prize_bps
+}
+
 /// Returns the number of participants.
 public fun participant_count(pool: &Pool): u64 {
     pool.participants.length()
@@ -525,11 +453,6 @@ public fun participant_count(pool: &Pool): u64 {
 /// Returns the prize pool value in MIST.
 public fun prize_pool_value(pool: &Pool): u64 {
     pool.prize_pool.value()
-}
-
-/// Returns the number of results entered.
-public fun results_entered(pool: &Pool): u64 {
-    pool.results_entered
 }
 
 /// Returns whether the pool is finalized.
@@ -572,16 +495,6 @@ public fun leaderboard_entry_points(entry: &LeaderboardEntry): u64 {
     entry.points
 }
 
-/// Returns the deadlines vector.
-public fun deadlines(pool: &Pool): &vector<u64> {
-    &pool.deadlines
-}
-
-/// Returns the results vector.
-public fun results(pool: &Pool): &vector<u8> {
-    &pool.results
-}
-
 /// Returns the participants vector.
 public fun participants(pool: &Pool): &vector<address> {
     &pool.participants
@@ -599,25 +512,23 @@ public fun cap_pool_id(cap: &PoolCreatorCap): ID {
 
 // === Internal Functions ===
 
-/// Creates a new ParticipantData with zeroed bets and no bonuses checked.
+/// Creates a new ParticipantData with zeroed bets.
 fun new_participant_data(): ParticipantData {
     ParticipantData {
-        bets: new_zero_vector_u8(TOTAL_MATCHES),
+        bets: vector::tabulate!(TOTAL_MATCHES, |_| 0u8),
         points: 0,
-        group_bonus_checked: new_false_vector(12),
         prize_amount: 0,
         claimed: false,
     }
 }
 
-/// Creates a vector of `len` zeroes (u8).
-fun new_zero_vector_u8(len: u64): vector<u8> {
-    vector::tabulate!(len, |_| 0u8)
-}
-
-/// Creates a vector of `len` false values.
-fun new_false_vector(len: u64): vector<bool> {
-    vector::tabulate!(len, |_| false)
+/// Returns the hardcoded deadline (ms) for a given phase.
+fun deadline_for_phase(phase: u8): u64 {
+    if (phase == 0) { DEADLINE_GROUP } else if (phase == 1) { DEADLINE_R32 } else if (phase == 2) {
+        DEADLINE_R16
+    } else if (phase == 3) { DEADLINE_QF } else if (phase == 4) { DEADLINE_SF } else if (
+        phase == 5
+    ) { DEADLINE_3RD } else { DEADLINE_FINAL }
 }
 
 /// Insertion sort leaderboard entries by points descending.
@@ -644,16 +555,6 @@ fun sort_leaderboard_desc(entries: &mut vector<LeaderboardEntry>) {
 public fun destroy_cap_for_testing(cap: PoolCreatorCap) {
     let PoolCreatorCap { id, .. } = cap;
     id.delete();
-}
-
-#[test_only]
-public fun results_mut_for_testing(pool: &mut Pool): &mut vector<u8> {
-    &mut pool.results
-}
-
-#[test_only]
-public fun set_results_entered_for_testing(pool: &mut Pool, count: u64) {
-    pool.results_entered = count;
 }
 
 #[test_only]

@@ -1,11 +1,9 @@
-/// Tests for result entry, scoring, and group bonus.
+/// Tests for scoring logic, compute_total_score, and tournament result entry.
 #[test_only]
 module world_cup_pool::scoring_tests;
 
-use sui::test_scenario::{Self as ts};
-use std::unit_test::destroy;
-use world_cup_pool::pool::{Self, Pool};
 use world_cup_pool::scoring;
+use world_cup_pool::tournament;
 use world_cup_pool::test_utils::{Self as tu};
 
 // === Pure scoring function tests ===
@@ -55,12 +53,7 @@ fun group_index_mapping() {
 
 #[test]
 fun group_completeness() {
-    let mut results = vector[];
-    let mut i: u64 = 0;
-    while (i < 104) {
-        results.push_back(0u8);
-        i = i + 1;
-    };
+    let mut results = vector::tabulate!(104, |_| 0u8);
     // Fill group 0 (matches 0-5)
     let mut j: u64 = 0;
     while (j < 6) {
@@ -74,234 +67,160 @@ fun group_completeness() {
 
 #[test]
 fun group_bonus_all_correct() {
-    let mut bets = vector[];
-    let mut results = vector[];
-    let mut i: u64 = 0;
-    while (i < 104) {
-        bets.push_back(1u8);
-        results.push_back(1u8);
-        i = i + 1;
-    };
+    let bets = tu::all_home_bets();
+    let results = tu::all_home_bets();
 
     assert!(scoring::check_group_bonus(&bets, &results, 0) == 3);
 }
 
 #[test]
 fun group_bonus_one_wrong() {
-    let mut bets = vector[];
-    let mut results = vector[];
-    let mut i: u64 = 0;
-    while (i < 104) {
-        bets.push_back(1u8);
-        results.push_back(1u8);
-        i = i + 1;
-    };
+    let mut bets = tu::all_home_bets();
+    let results = tu::all_home_bets();
     // Make one bet wrong in group 0
     *bets.borrow_mut(3) = 2u8;
 
     assert!(scoring::check_group_bonus(&bets, &results, 0) == 0);
 }
 
-// === Result entry & scoring integration tests ===
+// === compute_total_score tests ===
 
 #[test]
-fun enter_group_results_scores_correctly() {
-    let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+fun compute_total_score_all_correct() {
+    let bets = tu::all_home_bets();
+    let results = tu::all_home_bets();
 
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
-
-    // Creator bets all Home on group 0
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    let clock = tu::create_clock(500_000, &mut scenario);
-
-    let (indices, outcomes) = tu::match_range(0, 6, 1);
-    pool.place_bets(indices, outcomes, &clock, ts::ctx(&mut scenario));
-
-    // Enter results: matches 0-2 Home (correct), 3-5 Away (incorrect)
-    pool.enter_results(
-        &cap,
-        vector[0, 1, 2, 3, 4, 5],
-        vector[1, 1, 1, 3, 3, 3],
-    );
-
-    // 3 correct group matches = 3 points, no group bonus (only 3/6 correct)
-    assert!(pool.participant_points(tu::creator()) == 3);
-    assert!(pool.results_entered() == 6);
-
-    destroy(clock);
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
-    scenario.end();
+    // 72 group matches * 1 + 16 R32 * 2 + 8 R16 * 3 + 4 QF * 5 + 2 SF * 8 + 1 3rd * 8 + 1 Final * 13
+    // = 72 + 32 + 24 + 20 + 16 + 8 + 13 = 185
+    // + 12 group bonuses * 3 = 36
+    // Total = 221
+    let score = scoring::compute_total_score(&bets, &results);
+    assert!(score == 221);
 }
 
 #[test]
-fun group_bonus_awarded() {
-    let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+fun compute_total_score_all_wrong() {
+    let bets = tu::all_away_bets();
+    let results = tu::all_home_bets();
 
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
-
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    let clock = tu::create_clock(500_000, &mut scenario);
-
-    // Bet all Home on group 0
-    let (indices, outcomes) = tu::match_range(0, 6, 1);
-    pool.place_bets(indices, outcomes, &clock, ts::ctx(&mut scenario));
-
-    // Enter all 6 as Home (all correct)
-    pool.enter_results(
-        &cap,
-        vector[0, 1, 2, 3, 4, 5],
-        vector[1, 1, 1, 1, 1, 1],
-    );
-
-    // 6 correct × 1 point + 3 bonus = 9 points
-    assert!(pool.participant_points(tu::creator()) == 9);
-
-    destroy(clock);
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
-    scenario.end();
+    let score = scoring::compute_total_score(&bets, &results);
+    assert!(score == 0);
 }
 
 #[test]
-fun knockout_scoring() {
+fun compute_total_score_no_bets() {
+    let bets = vector::tabulate!(104, |_| 0u8); // No bets placed
+    let results = tu::all_home_bets();
+
+    let score = scoring::compute_total_score(&bets, &results);
+    assert!(score == 0);
+}
+
+#[test]
+fun compute_total_score_partial_group_correct() {
+    let mut bets = vector::tabulate!(104, |_| 0u8);
+    let results = tu::all_home_bets();
+
+    // Bet correctly on 3 of 6 matches in group 0
+    *bets.borrow_mut(0) = 1;
+    *bets.borrow_mut(1) = 1;
+    *bets.borrow_mut(2) = 1;
+    // Bet wrong on 3
+    *bets.borrow_mut(3) = 3;
+    *bets.borrow_mut(4) = 3;
+    *bets.borrow_mut(5) = 3;
+
+    // 3 correct * 1 point = 3, no group bonus
+    let score = scoring::compute_total_score(&bets, &results);
+    assert!(score == 3);
+}
+
+// === Tournament result entry tests ===
+
+#[test]
+fun tournament_enter_results() {
     let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
 
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
+    tournament.enter_results(&admin, vector[0, 1, 2], vector[1, 2, 3]);
+    assert!(tournament.results_entered() == 3);
+    assert!(*tournament.results().borrow(0) == 1);
+    assert!(*tournament.results().borrow(1) == 2);
+    assert!(*tournament.results().borrow(2) == 3);
 
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    let clock = tu::create_clock(500_000, &mut scenario);
+    tournament::destroy_for_testing(tournament, admin);
+    scenario.end();
+}
 
-    // Bet Home on one match from each knockout phase
-    pool.place_bets(
-        vector[72, 88, 96, 100, 102, 103],
-        vector[1, 1, 1, 1, 1, 1],
-        &clock,
-        ts::ctx(&mut scenario),
-    );
+#[test, expected_failure(abort_code = 2, location = world_cup_pool::tournament)]
+fun tournament_cannot_enter_twice() {
+    let mut scenario = tu::begin();
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
 
-    // Enter results: all correct
-    pool.enter_results(
-        &cap,
-        vector[72, 88, 96, 100, 102, 103],
-        vector[1, 1, 1, 1, 1, 1],
-    );
+    tournament.enter_results(&admin, vector[0], vector[1]);
+    tournament.enter_results(&admin, vector[0], vector[2]);
 
-    // R32: 2 + R16: 3 + QF: 5 + SF: 8 + 3rd: 8 + Final: 13 = 39
-    assert!(pool.participant_points(tu::creator()) == 39);
+    tournament::destroy_for_testing(tournament, admin);
+    scenario.end();
+}
 
-    destroy(clock);
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
+#[test, expected_failure(abort_code = 3, location = world_cup_pool::tournament)]
+fun tournament_no_draw_in_knockout() {
+    let mut scenario = tu::begin();
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
+
+    // Match 72 is R32 (knockout)
+    tournament.enter_results(&admin, vector[72], vector[2]);
+
+    tournament::destroy_for_testing(tournament, admin);
     scenario.end();
 }
 
 #[test]
-fun multi_participant_scoring() {
+fun tournament_group_phase_complete() {
     let mut scenario = tu::begin();
-    let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
-    let fee_coin = tu::mint_sui(fee, &mut scenario);
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
 
-    let cap = pool::create(fee, deadlines, option::some(fee_coin), ts::ctx(&mut scenario));
+    // Enter all 72 group results
+    let (indices, outcomes) = tu::match_range(0, 72, 1);
+    tournament.enter_results(&admin, indices, outcomes);
 
-    // User1 joins
-    ts::next_tx(&mut scenario, tu::user1());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    let coin1 = tu::mint_sui(fee, &mut scenario);
-    pool.join(option::some(coin1), ts::ctx(&mut scenario));
-    ts::return_shared(pool);
+    assert!(tournament.group_phase_complete());
+    assert!(tournament.results_entered() == 72);
 
-    // Creator bets Home on match 0
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    let clock = tu::create_clock(500_000, &mut scenario);
-    pool.place_bets(vector[0], vector[1], &clock, ts::ctx(&mut scenario));
-    ts::return_shared(pool);
-
-    // User1 bets Away on match 0
-    ts::next_tx(&mut scenario, tu::user1());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    pool.place_bets(vector[0], vector[3], &clock, ts::ctx(&mut scenario));
-    ts::return_shared(pool);
-
-    // Result is Home (1)
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-    pool.enter_results(&cap, vector[0], vector[1]);
-
-    assert!(pool.participant_points(tu::creator()) == 1); // Correct
-    assert!(pool.participant_points(tu::user1()) == 0);   // Wrong
-
-    destroy(clock);
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
-    scenario.end();
-}
-
-#[test, expected_failure(abort_code = 14, location = world_cup_pool::pool)]
-fun cannot_enter_result_twice() {
-    let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
-
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
-
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-
-    pool.enter_results(&cap, vector[0], vector[1]);
-    // Try to enter again
-    pool.enter_results(&cap, vector[0], vector[2]);
-
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
-    scenario.end();
-}
-
-#[test, expected_failure(abort_code = 9, location = world_cup_pool::pool)]
-fun cannot_enter_results_after_finalize() {
-    let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
-
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
-
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
-
-    // Enter all 104 results
-    let (indices, outcomes) = tu::all_match_indices_and_home();
-    pool.enter_results(&cap, indices, outcomes);
-    pool.finalize(&cap);
-
-    // Try to enter more results
-    pool.enter_results(&cap, vector[0], vector[1]);
-
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
+    tournament::destroy_for_testing(tournament, admin);
     scenario.end();
 }
 
 #[test]
-fun no_bet_means_no_points() {
+fun tournament_advance_phase() {
     let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
 
-    let cap = pool::create(0, deadlines, option::none(), ts::ctx(&mut scenario));
+    // Enter all group results
+    let (indices, outcomes) = tu::match_range(0, 72, 1);
+    tournament.enter_results(&admin, indices, outcomes);
 
-    ts::next_tx(&mut scenario, tu::creator());
-    let mut pool = ts::take_shared<Pool>(&scenario);
+    assert!(tournament.current_phase() == 0);
+    tournament.advance_phase(&admin);
+    assert!(tournament.current_phase() == 1);
 
-    // Don't place any bets, but enter a result
-    pool.enter_results(&cap, vector[0], vector[1]);
-    assert!(pool.participant_points(tu::creator()) == 0);
+    tournament::destroy_for_testing(tournament, admin);
+    scenario.end();
+}
 
-    ts::return_shared(pool);
-    pool::destroy_cap_for_testing(cap);
+#[test, expected_failure(abort_code = 4, location = world_cup_pool::tournament)]
+fun tournament_cannot_advance_incomplete_phase() {
+    let mut scenario = tu::begin();
+    let (mut tournament, admin) = tu::create_tournament(&mut scenario);
+
+    // Enter only 50 of 72 group results
+    let (indices, outcomes) = tu::match_range(0, 50, 1);
+    tournament.enter_results(&admin, indices, outcomes);
+
+    // Try to advance
+    tournament.advance_phase(&admin);
+
+    tournament::destroy_for_testing(tournament, admin);
     scenario.end();
 }

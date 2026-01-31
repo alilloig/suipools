@@ -10,12 +10,12 @@ use world_cup_pool::test_utils::{Self as tu};
 fun create_pool() {
     let mut scenario = tu::begin();
     let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
     let fee_coin = tu::mint_sui(fee, &mut scenario);
 
     let cap = pool::create(
         fee,
-        deadlines,
+        prize_bps,
         option::some(fee_coin),
         ts::ctx(&mut scenario),
     );
@@ -26,7 +26,6 @@ fun create_pool() {
     assert!(pool.entry_fee() == fee);
     assert!(pool.participant_count() == 1);
     assert!(pool.prize_pool_value() == fee);
-    assert!(pool.results_entered() == 0);
     assert!(pool.is_participant(tu::creator()));
     assert!(!pool.is_finalized());
 
@@ -38,11 +37,11 @@ fun create_pool() {
 #[test]
 fun create_free_pool() {
     let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
 
     let cap = pool::create(
         0,
-        deadlines,
+        prize_bps,
         option::none(),
         ts::ctx(&mut scenario),
     );
@@ -63,12 +62,12 @@ fun create_free_pool() {
 fun join_pool() {
     let mut scenario = tu::begin();
     let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
     let fee_coin = tu::mint_sui(fee, &mut scenario);
 
     let cap = pool::create(
         fee,
-        deadlines,
+        prize_bps,
         option::some(fee_coin),
         ts::ctx(&mut scenario),
     );
@@ -91,11 +90,11 @@ fun join_pool() {
 #[test]
 fun join_free_pool() {
     let mut scenario = tu::begin();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
 
     let cap = pool::create(
         0,
-        deadlines,
+        prize_bps,
         option::none(),
         ts::ctx(&mut scenario),
     );
@@ -116,12 +115,12 @@ fun join_free_pool() {
 fun cannot_join_twice() {
     let mut scenario = tu::begin();
     let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
     let fee_coin = tu::mint_sui(fee, &mut scenario);
 
     let cap = pool::create(
         fee,
-        deadlines,
+        prize_bps,
         option::some(fee_coin),
         ts::ctx(&mut scenario),
     );
@@ -141,12 +140,12 @@ fun cannot_join_twice() {
 fun wrong_fee_amount() {
     let mut scenario = tu::begin();
     let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
     let fee_coin = tu::mint_sui(fee, &mut scenario);
 
     let cap = pool::create(
         fee,
-        deadlines,
+        prize_bps,
         option::some(fee_coin),
         ts::ctx(&mut scenario),
     );
@@ -162,12 +161,12 @@ fun wrong_fee_amount() {
 }
 
 #[test, expected_failure(abort_code = 3, location = world_cup_pool::pool)]
-fun invalid_deadlines_wrong_length() {
+fun invalid_prize_bps_wrong_sum() {
     let mut scenario = tu::begin();
 
     let cap = pool::create(
         0,
-        vector[1000, 2000, 3000],
+        vector[5000, 3000, 1000], // Sum = 9000, not 10000
         option::none(),
         ts::ctx(&mut scenario),
     );
@@ -177,12 +176,12 @@ fun invalid_deadlines_wrong_length() {
 }
 
 #[test, expected_failure(abort_code = 3, location = world_cup_pool::pool)]
-fun invalid_deadlines_zero_value() {
+fun invalid_prize_bps_not_decreasing() {
     let mut scenario = tu::begin();
 
     let cap = pool::create(
         0,
-        vector[0, 2000, 3000, 4000, 5000, 6000, 7000],
+        vector[3000, 5000, 2000], // Not non-increasing
         option::none(),
         ts::ctx(&mut scenario),
     );
@@ -192,12 +191,27 @@ fun invalid_deadlines_zero_value() {
 }
 
 #[test, expected_failure(abort_code = 3, location = world_cup_pool::pool)]
-fun invalid_deadlines_not_non_decreasing() {
+fun invalid_prize_bps_empty() {
     let mut scenario = tu::begin();
 
     let cap = pool::create(
         0,
-        vector[1000, 2000, 1500, 4000, 5000, 6000, 7000],
+        vector[], // Empty
+        option::none(),
+        ts::ctx(&mut scenario),
+    );
+
+    pool::destroy_cap_for_testing(cap);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = 3, location = world_cup_pool::pool)]
+fun invalid_prize_bps_zero_element() {
+    let mut scenario = tu::begin();
+
+    let cap = pool::create(
+        0,
+        vector[10000, 0], // Zero element
         option::none(),
         ts::ctx(&mut scenario),
     );
@@ -207,15 +221,36 @@ fun invalid_deadlines_not_non_decreasing() {
 }
 
 #[test]
+fun winner_takes_all() {
+    let mut scenario = tu::begin();
+    let prize_bps = vector[10000]; // Winner takes all
+
+    let cap = pool::create(
+        0,
+        prize_bps,
+        option::none(),
+        ts::ctx(&mut scenario),
+    );
+
+    ts::next_tx(&mut scenario, tu::creator());
+    let pool = ts::take_shared<Pool>(&scenario);
+    assert!(pool.prize_bps().length() == 1);
+
+    ts::return_shared(pool);
+    pool::destroy_cap_for_testing(cap);
+    scenario.end();
+}
+
+#[test]
 fun multiple_participants_join() {
     let mut scenario = tu::begin();
     let fee = tu::default_fee();
-    let deadlines = tu::default_deadlines();
+    let prize_bps = tu::default_prize_bps();
     let fee_coin = tu::mint_sui(fee, &mut scenario);
 
     let cap = pool::create(
         fee,
-        deadlines,
+        prize_bps,
         option::some(fee_coin),
         ts::ctx(&mut scenario),
     );

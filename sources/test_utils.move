@@ -1,12 +1,13 @@
 /// Module: test_utils
-/// Shared test infrastructure for the World Cup office pool tests.
+/// Shared test infrastructure for the World Cup SuiPoolool tests.
 #[test_only]
 module world_cup_pool::test_utils;
 
-use sui::coin::{Self, Coin};
 use sui::clock::{Self, Clock};
+use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 use sui::test_scenario::{Self as ts, Scenario};
+use world_cup_pool::tournament::{Self, Tournament, AdminCap};
 
 // === Test Addresses ===
 
@@ -23,15 +24,25 @@ const USER9: address = @0x09;
 const USER10: address = @0x0A;
 
 public fun creator(): address { CREATOR }
+
 public fun user1(): address { USER1 }
+
 public fun user2(): address { USER2 }
+
 public fun user3(): address { USER3 }
+
 public fun user4(): address { USER4 }
+
 public fun user5(): address { USER5 }
+
 public fun user6(): address { USER6 }
+
 public fun user7(): address { USER7 }
+
 public fun user8(): address { USER8 }
+
 public fun user9(): address { USER9 }
+
 public fun user10(): address { USER10 }
 
 // === Helper Functions ===
@@ -53,39 +64,19 @@ public fun create_clock(timestamp_ms: u64, scenario: &mut Scenario): Clock {
     clock
 }
 
-/// Returns default deadlines: 7 values, each 1 hour apart starting at 1000000.
-public fun default_deadlines(): vector<u64> {
-    vector[
-        1_000_000,  // Groups
-        2_000_000,  // R32
-        3_000_000,  // R16
-        4_000_000,  // QF
-        5_000_000,  // SF
-        6_000_000,  // 3rd place
-        7_000_000,  // Final
-    ]
+/// Returns default prize BPS: top 3 winner-takes-most distribution.
+public fun default_prize_bps(): vector<u64> {
+    vector[5000, 3000, 2000]
 }
 
 /// Returns a bets vector where all 104 matches are bet as Home (1).
 public fun all_home_bets(): vector<u8> {
-    let mut v = vector[];
-    let mut i: u64 = 0;
-    while (i < 104) {
-        v.push_back(1u8);
-        i = i + 1;
-    };
-    v
+    vector::tabulate!(104, |_| 1u8)
 }
 
 /// Returns a bets vector where all 104 matches are bet as Away (3).
 public fun all_away_bets(): vector<u8> {
-    let mut v = vector[];
-    let mut i: u64 = 0;
-    while (i < 104) {
-        v.push_back(3u8);
-        i = i + 1;
-    };
-    v
+    vector::tabulate!(104, |_| 3u8)
 }
 
 /// Returns vectors of all match indices (0..103) and all Home outcomes.
@@ -122,4 +113,21 @@ public fun default_fee(): u64 {
 /// Destroy a coin in tests.
 public fun destroy_coin<T>(coin: Coin<T>) {
     coin::burn_for_testing(coin);
+}
+
+/// Create a Tournament and AdminCap for testing.
+public fun create_tournament(scenario: &mut Scenario): (Tournament, AdminCap) {
+    tournament::create_for_testing(ts::ctx(scenario))
+}
+
+/// Enter all 104 results as Home (1) into a tournament.
+/// Also sets group_phase_complete.
+public fun enter_all_tournament_results(tournament: &mut Tournament, admin: &AdminCap) {
+    // Enter group results (Home win, no draws)
+    let (group_indices, group_outcomes) = match_range(0, 72, 1);
+    tournament.enter_results(admin, group_indices, group_outcomes);
+
+    // Enter knockout results (Home win, no draws)
+    let (ko_indices, ko_outcomes) = match_range(72, 104, 1);
+    tournament.enter_results(admin, ko_indices, ko_outcomes);
 }
