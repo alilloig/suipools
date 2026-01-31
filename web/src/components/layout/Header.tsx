@@ -10,7 +10,7 @@ export function Header() {
       <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/" className="flex items-center gap-2 text-white font-bold text-lg hover:text-pitch-light transition-colors">
-            <span>World Cup SuiPool</span>
+            <span>SuiPools</span>
           </Link>
           {isAdmin && (
             <Link to="/admin" className="text-xs font-medium text-yellow-400 hover:text-yellow-300 transition-colors bg-yellow-400/10 px-2 py-1 rounded">

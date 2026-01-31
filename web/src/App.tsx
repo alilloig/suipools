@@ -7,6 +7,7 @@ import { CreatePoolPage } from "./pages/CreatePoolPage";
 import { PoolPage } from "./pages/PoolPage";
 import { AdminPage } from "./pages/AdminPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { WorldCupPage } from "./pages/WorldCupPage";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         <PageContainer>
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/world-cup" element={<WorldCupPage />} />
             <Route path="/create" element={<CreatePoolPage />} />
             <Route path="/pool/:poolId" element={<PoolPage />} />
             <Route path="/admin" element={<AdminPage />} />

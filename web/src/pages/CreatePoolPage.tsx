@@ -43,7 +43,7 @@ export function CreatePoolPage() {
 
     try {
       await createPool(entryFee, prizeBps);
-      navigate("/");
+      navigate("/world-cup");
     } catch (err) {
       console.error("Failed to create pool:", err);
     }

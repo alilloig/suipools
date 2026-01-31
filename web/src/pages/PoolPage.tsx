@@ -12,7 +12,7 @@ import { ClaimPrizeButton } from "../components/prizes/ClaimPrizeButton";
 import { PrizeBreakdown } from "../components/prizes/PrizeBreakdown";
 import { FinalizeButton } from "../components/results/FinalizeButton";
 import { WithdrawButton } from "../components/prizes/WithdrawButton";
-import { ConnectPrompt } from "../components/wallet/ConnectPrompt";
+import { WelcomeHero } from "../components/welcome/WelcomeHero";
 import { usePool } from "../hooks/usePool";
 import { useIsPoolCreator } from "../hooks/useIsPoolCreator";
 import { useParticipantData } from "../hooks/useParticipantData";
@@ -135,7 +135,7 @@ export function PoolPage() {
 
       {/* Not connected */}
       {!account && !poolFields.finalized && (
-        <ConnectPrompt message="Connect your wallet to join this pool and place bets" />
+        <WelcomeHero variant="compact" />
       )}
     </div>
   );
