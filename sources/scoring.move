@@ -1,5 +1,5 @@
 /// Module: scoring
-/// Pure scoring helpers for the World Cup office pool.
+/// Pure scoring helpers for the World Cup SuiPoolool.
 /// Maps match indices to phases, groups, deadlines, and computes points.
 ///
 /// Match index layout (104 total):
@@ -146,4 +146,30 @@ public fun check_group_bonus(bets: &vector<u8>, results: &vector<u8>, group_idx:
         i = i + 1;
     };
     GROUP_BONUS
+}
+
+/// Compute total score for a participant in one pass.
+/// Iterates all 104 matches for point-based scoring, then checks all 12 group bonuses.
+public fun compute_total_score(bets: &vector<u8>, results: &vector<u8>): u64 {
+    let mut score: u64 = 0;
+
+    // Score all 104 matches
+    let mut i: u64 = 0;
+    while (i < TOTAL_MATCHES) {
+        let bet = *bets.borrow(i);
+        let result = *results.borrow(i);
+        if (bet != 0 && result != 0 && bet == result) {
+            score = score + points_for_match(i);
+        };
+        i = i + 1;
+    };
+
+    // Check all 12 group bonuses
+    let mut g: u64 = 0;
+    while (g < NUM_GROUPS) {
+        score = score + check_group_bonus(bets, results, g);
+        g = g + 1;
+    };
+
+    score
 }
