@@ -1,0 +1,27 @@
+{
+  "headers": {
+    "/assets/*.css": {
+      "Cache-Control": "max-age=31536000",
+      "Content-Type": "text/css; charset=utf-8"
+    },
+    "/assets/*.js": {
+      "Cache-Control": "max-age=31536000",
+      "Content-Type": "application/javascript; charset=utf-8"
+    },
+    "/index.html": {
+      "Cache-Control": "max-age=86400",
+      "Content-Type": "text/html; charset=utf-8"
+    }
+  },
+  "routes": {
+    "/*": "/index.html"
+  },
+  "metadata": {
+    "link": "https://suipools.wal.app",
+    "image_url": null,
+    "description": "SuiPools - Decentralized betting pools on Sui",
+    "project_url": "https://github.com/alilloig/suipools",
+    "creator": "@alilloig"
+  },
+  "object_id": "0x119671dd35dd303cab67aa8eb4fb6f70c894980bd4ebb9e1095cdfe5acdd6cb1"
+}
