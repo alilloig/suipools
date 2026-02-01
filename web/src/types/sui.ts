@@ -41,3 +41,37 @@ export interface AdvancePhaseParams {
   tournamentId: string;
   adminCapId: string;
 }
+
+export interface CreateSquaresPoolParams {
+  entryFee: bigint;
+  maxPerPlayer: number;
+  prizeBps: number[];
+}
+
+export interface BuySquareParams {
+  poolId: string;
+  position: number;
+  entryFee: bigint;
+}
+
+export interface AssignNumbersParams {
+  poolId: string;
+}
+
+export interface EnterScoreParams {
+  poolId: string;
+  capId: string;
+  quarter: number;
+  teamAScore: number;
+  teamBScore: number;
+}
+
+export interface ClaimSquaresPrizeParams {
+  poolId: string;
+  quarter: number;
+}
+
+export interface WithdrawSquaresRemainderParams {
+  poolId: string;
+  capId: string;
+}
