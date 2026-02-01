@@ -16,4 +16,12 @@ export const POOL_TYPES: PoolType[] = [
     route: "/world-cup",
     enabled: true,
   },
+  {
+    id: "super-bowl-squares",
+    title: "Super Bowl Squares",
+    icon: "🏈",
+    tagline: "Pick your squares, pray for the right digits",
+    route: "/super-bowl-squares",
+    enabled: true,
+  },
 ];

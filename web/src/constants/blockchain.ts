@@ -58,3 +58,22 @@ export function poolCreatorCapType(): string {
 export function adminCapType(): string {
   return `${getPackageId()}::${TOURNAMENT_MODULE}::AdminCap`;
 }
+
+export const SQUARES_MODULE = "squares";
+
+export const SQUARES_ENTRY_FUNCTIONS = {
+  create: "create",
+  buySquare: "buy_square",
+  assignNumbers: "assign_numbers",
+  enterScore: "enter_score",
+  claimPrize: "claim_prize",
+  withdrawRemainder: "withdraw_remainder",
+} as const;
+
+export function squaresTarget(fn: string): `${string}::${string}::${string}` {
+  return `${getPackageId()}::${SQUARES_MODULE}::${fn}`;
+}
+
+export function squaresCreatorCapType(): string {
+  return `${getPackageId()}::${SQUARES_MODULE}::SquaresCreatorCap`;
+}

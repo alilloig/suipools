@@ -8,6 +8,9 @@ import { PoolPage } from "./pages/PoolPage";
 import { AdminPage } from "./pages/AdminPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorldCupPage } from "./pages/WorldCupPage";
+import { SuperBowlSquaresPage } from "./pages/SuperBowlSquaresPage";
+import { CreateSquaresPoolPage } from "./pages/CreateSquaresPoolPage";
+import { SquaresPoolPage } from "./pages/SquaresPoolPage";
 
 function App() {
   return (
@@ -21,6 +24,9 @@ function App() {
             <Route path="/create" element={<CreatePoolPage />} />
             <Route path="/pool/:poolId" element={<PoolPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/super-bowl-squares" element={<SuperBowlSquaresPage />} />
+            <Route path="/super-bowl-squares/create" element={<CreateSquaresPoolPage />} />
+            <Route path="/super-bowl-squares/pool/:poolId" element={<SquaresPoolPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </PageContainer>
